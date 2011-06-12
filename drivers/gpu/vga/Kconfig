@@ -27,3 +27,10 @@ config VGA_SWITCHEROO
           X isn't running and delayed switching until the next logoff. This
 	  feature is called hybrid graphics, ATI PowerXpress, and Nvidia
 	  HybridPower.
+
+config VGA_APPLE_GMUX
+	bool "Apple GMUX handler for Hybrid Graphics"
+	depends on VGA_SWITCHEROO
+	help
+	  Include GMUX handler for switching hybrid graphics on newer MacBookPros
+

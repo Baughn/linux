@@ -152,7 +152,7 @@ cifs_reconnect(struct TCP_Server_Info *server)
 		mid_entry->callback(mid_entry);
 	}
 
-	while (server->tcpStatus == CifsNeedReconnect) {
+	do {
 		try_to_freeze();
 
 		/* we should try only the port we connected to before */
@@ -167,7 +167,7 @@ cifs_reconnect(struct TCP_Server_Info *server)
 				server->tcpStatus = CifsNeedNegotiate;
 			spin_unlock(&GlobalMid_Lock);
 		}
-	}
+	} while (server->tcpStatus == CifsNeedReconnect);
 
 	return rc;
 }
@@ -2149,7 +2149,10 @@ cifs_put_tlink(struct tcon_link *tlink)
 }
 
 static inline struct tcon_link *
-cifs_sb_master_tlink(struct cifs_sb_info *cifs_sb);
+cifs_sb_master_tlink(struct cifs_sb_info *cifs_sb)
+{
+	return cifs_sb->master_tlink;
+}
 
 static int
 compare_mount_options(struct super_block *sb, struct cifs_mnt_data *mnt_data)
@@ -2747,21 +2750,21 @@ void cifs_setup_cifs_sb(struct smb_vol *pvolume_info,
 
 /*
  * When the server supports very large writes via POSIX extensions, we can
- * allow up to 2^24 - PAGE_CACHE_SIZE.
+ * allow up to 2^24-1, minus the size of a WRITE_AND_X header, not including
+ * the RFC1001 length.
  *
  * Note that this might make for "interesting" allocation problems during
- * writeback however (as we have to allocate an array of pointers for the
- * pages). A 16M write means ~32kb page array with PAGE_CACHE_SIZE == 4096.
+ * writeback however as we have to allocate an array of pointers for the
+ * pages. A 16M write means ~32kb page array with PAGE_CACHE_SIZE == 4096.
  */
-#define CIFS_MAX_WSIZE ((1<<24) - PAGE_CACHE_SIZE)
+#define CIFS_MAX_WSIZE ((1<<24) - 1 - sizeof(WRITE_REQ) + 4)
 
 /*
- * When the server doesn't allow large posix writes, default to a wsize of
- * 128k - PAGE_CACHE_SIZE -- one page less than the largest frame size
- * described in RFC1001. This allows space for the header without going over
- * that by default.
+ * When the server doesn't allow large posix writes, only allow a wsize of
+ * 128k minus the size of the WRITE_AND_X header. That allows for a write up
+ * to the maximum size described by RFC1002.
  */
-#define CIFS_MAX_RFC1001_WSIZE (128 * 1024 - PAGE_CACHE_SIZE)
+#define CIFS_MAX_RFC1002_WSIZE (128 * 1024 - sizeof(WRITE_REQ) + 4)
 
 /*
  * The default wsize is 1M. find_get_pages seems to return a maximum of 256
@@ -2780,11 +2783,18 @@ cifs_negotiate_wsize(struct cifs_tcon *tcon, struct smb_vol *pvolume_info)
 
 	/* can server support 24-bit write sizes? (via UNIX extensions) */
 	if (!tcon->unix_ext || !(unix_cap & CIFS_UNIX_LARGE_WRITE_CAP))
-		wsize = min_t(unsigned int, wsize, CIFS_MAX_RFC1001_WSIZE);
+		wsize = min_t(unsigned int, wsize, CIFS_MAX_RFC1002_WSIZE);
 
-	/* no CAP_LARGE_WRITE_X? Limit it to 16 bits */
-	if (!(server->capabilities & CAP_LARGE_WRITE_X))
-		wsize = min_t(unsigned int, wsize, USHRT_MAX);
+	/*
+	 * no CAP_LARGE_WRITE_X or is signing enabled without CAP_UNIX set?
+	 * Limit it to max buffer offered by the server, minus the size of the
+	 * WRITEX header, not including the 4 byte RFC1001 length.
+	 */
+	if (!(server->capabilities & CAP_LARGE_WRITE_X) ||
+	    (!(server->capabilities & CAP_UNIX) &&
+	     (server->sec_mode & (SECMODE_SIGN_ENABLED|SECMODE_SIGN_REQUIRED))))
+		wsize = min_t(unsigned int, wsize,
+				server->maxBuf - sizeof(WRITE_REQ) + 4);
 
 	/* hard limit of CIFS_MAX_WSIZE */
 	wsize = min_t(unsigned int, wsize, CIFS_MAX_WSIZE);
@@ -2934,7 +2944,11 @@ int cifs_setup_volume_info(struct smb_vol **pvolume_info, char *mount_data,
 
 	if (volume_info->nullauth) {
 		cFYI(1, "null user");
-		volume_info->username = "";
+		volume_info->username = kzalloc(1, GFP_KERNEL);
+		if (volume_info->username == NULL) {
+			rc = -ENOMEM;
+			goto out;
+		}
 	} else if (volume_info->username) {
 		/* BB fixme parse for domain name here */
 		cFYI(1, "Username: %s", volume_info->username);
@@ -3171,6 +3185,10 @@ out:
 	return rc;
 }
 
+/*
+ * Issue a TREE_CONNECT request. Note that for IPC$ shares, that the tcon
+ * pointer may be NULL.
+ */
 int
 CIFSTCon(unsigned int xid, struct cifs_ses *ses,
 	 const char *tree, struct cifs_tcon *tcon,
@@ -3205,7 +3223,7 @@ CIFSTCon(unsigned int xid, struct cifs_ses *ses,
 	pSMB->AndXCommand = 0xFF;
 	pSMB->Flags = cpu_to_le16(TCON_EXTENDED_SECINFO);
 	bcc_ptr = &pSMB->Password[0];
-	if ((ses->server->sec_mode) & SECMODE_USER) {
+	if (!tcon || (ses->server->sec_mode & SECMODE_USER)) {
 		pSMB->PasswordLength = cpu_to_le16(1);	/* minimum */
 		*bcc_ptr = 0; /* password is null byte */
 		bcc_ptr++;              /* skip password */
@@ -3371,7 +3389,7 @@ int cifs_negotiate_protocol(unsigned int xid, struct cifs_ses *ses)
 	}
 	if (rc == 0) {
 		spin_lock(&GlobalMid_Lock);
-		if (server->tcpStatus != CifsExiting)
+		if (server->tcpStatus == CifsNeedNegotiate)
 			server->tcpStatus = CifsGood;
 		else
 			rc = -EHOSTDOWN;
@@ -3482,12 +3500,6 @@ out:
 	kfree(vol_info);
 
 	return tcon;
-}
-
-static inline struct tcon_link *
-cifs_sb_master_tlink(struct cifs_sb_info *cifs_sb)
-{
-	return cifs_sb->master_tlink;
 }
 
 struct cifs_tcon *

@@ -175,6 +175,10 @@ void b43_generate_plcp_hdr(struct b43_plcp_hdr4 *plcp,
 	}
 }
 
+/* Specs say it has to be used for N-PHY and LP-PHY. Tests has shown HT-PHY also
+ * needs that.
+ * TODO: verify SSLPN and LCN
+ */
 static u16 b43_generate_tx_phy_ctl1(struct b43_wldev *dev, u8 bitrate)
 {
 	const struct b43_phy *phy = &dev->phy;
@@ -531,7 +535,7 @@ int b43_generate_txhdr(struct b43_wldev *dev,
 			extra_ft |= B43_TXH_EFT_RTSFB_CCK;
 
 		if (rates[0].flags & IEEE80211_TX_RC_USE_RTS_CTS &&
-		    phy->type == B43_PHYTYPE_N) {
+		    phy->type >= B43_PHYTYPE_N) {
 			txhdr->phy_ctl1_rts = cpu_to_le16(
 				b43_generate_tx_phy_ctl1(dev, rts_rate));
 			txhdr->phy_ctl1_rts_fb = cpu_to_le16(
@@ -552,7 +556,7 @@ int b43_generate_txhdr(struct b43_wldev *dev,
 		break;
 	}
 
-	if (phy->type == B43_PHYTYPE_N) {
+	if (phy->type >= B43_PHYTYPE_N) {
 		txhdr->phy_ctl1 =
 			cpu_to_le16(b43_generate_tx_phy_ctl1(dev, rate));
 		txhdr->phy_ctl1_fb =

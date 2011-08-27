@@ -73,6 +73,10 @@ MODULE_PARM_DESC(i915_enable_fbc,
 		"Enable frame buffer compression for power savings "
 		"(default: false)");
 
+unsigned int i915_lvds_channels = 0;
+module_param_named(lvds_channels, i915_lvds_channels, int, 0600);
+MODULE_PARM_DESC(lvds_channels, "LVDS channels in use: 0=(default) probe hardware 1=single 2=dual");
+
 unsigned int i915_lvds_downclock __read_mostly = 0;
 module_param_named(lvds_downclock, i915_lvds_downclock, int, 0400);
 MODULE_PARM_DESC(lvds_downclock,

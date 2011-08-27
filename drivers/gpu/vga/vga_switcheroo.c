@@ -62,6 +62,8 @@ static void vga_switcheroo_debugfs_fini(struct vgasr_priv *priv);
 /* only one switcheroo per system */
 static struct vgasr_priv vgasr_priv;
 
+static void vga_switcheroo_enable(void);
+
 int vga_switcheroo_register_handler(struct vga_switcheroo_handler *handler)
 {
 	mutex_lock(&vgasr_mutex);
@@ -71,6 +73,11 @@ int vga_switcheroo_register_handler(struct vga_switcheroo_handler *handler)
 	}
 
 	vgasr_priv.handler = handler;
+	/* if we get two clients + handler */
+	if (vgasr_priv.registered_clients == 0x3 && vgasr_priv.handler) {
+		printk(KERN_INFO "vga_switcheroo: enabled\n");
+		vga_switcheroo_enable();
+	}
 	mutex_unlock(&vgasr_mutex);
 	return 0;
 }

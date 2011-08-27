@@ -29,6 +29,7 @@
 #include "radeon_reg.h"
 #include "radeon.h"
 #include "atom.h"
+#include <linux/firmware.h>
 
 #include <linux/vga_switcheroo.h>
 #include <linux/slab.h>
@@ -56,6 +57,7 @@ static bool igp_read_bios_from_vram(struct radeon_device *rdev)
 	vram_base = pci_resource_start(rdev->pdev, 0);
 	bios = ioremap(vram_base, size);
 	if (!bios) {
+		DRM_ERROR("No bios\n");
 		return false;
 	}
 
@@ -65,11 +67,47 @@ static bool igp_read_bios_from_vram(struct radeon_device *rdev)
 	}
 	rdev->bios = kmalloc(size, GFP_KERNEL);
 	if (rdev->bios == NULL) {
+		DRM_ERROR("alloc fail\n");
 		iounmap(bios);
 		return false;
 	}
 	memcpy_fromio(rdev->bios, bios, size);
 	iounmap(bios);
+	return true;
+}
+
+static bool radeon_read_bios_from_firmware(struct radeon_device *rdev)
+{
+	const uint8_t __iomem *bios;
+	resource_size_t size;
+	const struct firmware *fw = NULL;
+
+	request_firmware(&fw, "radeon/vbios.bin", rdev->dev);
+	if (!fw) {
+		DRM_ERROR("No bios\n");
+		return false;
+	}
+	size = fw->size;
+	bios = fw->data;
+
+	if (!bios) {
+		DRM_ERROR("No bios\n");
+		return false;
+	}
+
+	if (size == 0 || bios[0] != 0x55 || bios[1] != 0xaa) {
+		DRM_ERROR("wrong sig\n");
+		release_firmware(fw);
+		return false;
+	}
+	rdev->bios = kmalloc(size, GFP_KERNEL);
+	if (rdev->bios == NULL) {
+		DRM_ERROR("alloc fail\n");
+		release_firmware(fw);
+		return false;
+	}
+	memcpy(rdev->bios, bios, size);
+	release_firmware(fw);
 	return true;
 }
 
@@ -489,6 +527,9 @@ bool radeon_get_bios(struct radeon_device *rdev)
 		r = radeon_read_bios(rdev);
 	if (r == false) {
 		r = radeon_read_disabled_bios(rdev);
+		if (r == false) {
+			r = radeon_read_bios_from_firmware(rdev);
+		}
 	}
 	if (r == false || rdev->bios == NULL) {
 		DRM_ERROR("Unable to locate a BIOS ROM\n");

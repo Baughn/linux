@@ -1223,7 +1223,7 @@ static int __init applesmc_init(void)
 {
 	int ret;
 
-	if (!dmi_check_system(applesmc_whitelist)) {
+	if (0 && !dmi_check_system(applesmc_whitelist)) {
 		pr_warn("supported laptop not found!\n");
 		ret = -ENODEV;
 		goto out;
